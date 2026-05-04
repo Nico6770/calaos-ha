@@ -58,8 +58,8 @@ class CalaosCoordinator:
             model="Calaos v3",
         )
 
-        for itemType in noentity_triggers.keys():
-            for item in self.client.items_by_type(itemType):
+        for item_type in noentity_triggers.keys():
+            for item in self.client.items_by_type(item_type):
                 await self.declare_device(dev_registry, self.entry_id, item)
 
     async def declare_device(
@@ -75,6 +75,7 @@ class CalaosCoordinator:
             suggested_area=item.room.name,
             via_device=(DOMAIN, entry_id),
         )
+
         self._device_id_by_id[item.id] = device.id
 
     @callback
@@ -92,48 +93,68 @@ class CalaosCoordinator:
             try:
                 await self.connect()
             except (RemoteDisconnected, URLError) as ex:
-                _LOGGER.error(f"connection error before polling: {ex}")
+                _LOGGER.error("connection error before polling: %s", ex)
                 self.client = None
                 return
             except Exception as ex:
-                _LOGGER.error(f"unknown error before polling: {ex}")
+                _LOGGER.error("unknown error before polling: %s", ex)
                 self.client = None
                 return
+
         try:
             events = await self.hass.async_add_executor_job(self.client.poll)
         except (RemoteDisconnected, URLError) as ex:
-            _LOGGER.error(f"connection error while polling: {ex}")
+            _LOGGER.error("connection error while polling: %s", ex)
             self.client = None
             return
         except Exception as ex:
-            _LOGGER.error(f"unknown error while polling: {ex}")
+            _LOGGER.error("unknown error while polling: %s", ex)
             self.client = None
             return
-        if len(events) > 0:
-            _LOGGER.debug(f"Calaos events: {events}")
-            for evt in events:
-                # If the item has an entity, simply schedule its update
-                if evt.item.id in self._entity_by_id:
-                    _LOGGER.debug(f"Event for known entity: {evt}")
-                    entity = self._entity_by_id[evt.item.id]
-                    entity.async_schedule_update_ha_state()
-                    continue
 
-                # Fire HA events for noentity items
-                event_type = noentity_translate_trigger(evt)
-                if event_type:
-                    _LOGGER.debug(
-                        f"Event for known no-entity device: {evt} -> {event_type}"
-                    )
-                    if evt.item.id in self._device_id_by_id:
-                        self.hass.bus.async_fire(
-                            EVENT_DOMAIN,
-                            {
-                                CONF_DEVICE_ID: self._device_id_by_id[evt.item.id],
-                                CONF_TYPE: event_type,
-                            },
-                        )
+        if len(events) > 0:
+            _LOGGER.debug("Calaos events: %s", events)
+
+        for evt in events:
+            if evt.item.id in self._entity_by_id:
+                _LOGGER.debug("Event for known entity: %s", evt)
+                entity = self._entity_by_id[evt.item.id]
+                entity.async_schedule_update_ha_state()
+                continue
+
+            event_type = noentity_translate_trigger(evt)
+            if not event_type:
+                _LOGGER.debug(
+                    "Ignoring no-entity event with unsupported state: item=%s type=%s state=%r",
+                    getattr(evt.item, "id", None),
+                    type(evt.item).__name__,
+                    getattr(evt, "state", None),
+                )
+                continue
+
+            device_id = self._device_id_by_id.get(evt.item.id)
+            if not device_id:
+                _LOGGER.warning(
+                    "No Home Assistant device registered for Calaos item %s (%s)",
+                    evt.item.id,
+                    getattr(evt.item, "name", "unknown"),
+                )
+                continue
+
+            _LOGGER.debug(
+                "Firing Home Assistant event for no-entity device: item=%s trigger=%s device_id=%s",
+                evt.item.id,
+                event_type,
+                device_id,
+            )
+            self.hass.bus.async_fire(
+                EVENT_DOMAIN,
+                {
+                    CONF_DEVICE_ID: device_id,
+                    CONF_TYPE: event_type,
+                },
+            )
 
     async def start_poller(self) -> None:
-        _LOGGER.debug(f"Starting the poller for {self.calaos_url}")
+        _LOGGER.debug("Starting the poller for %s", self.calaos_url)
         self.stopper = async_track_time_interval(self.hass, self.poll, POLL_INTERVAL)
