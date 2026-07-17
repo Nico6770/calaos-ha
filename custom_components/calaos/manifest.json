@@ -11,7 +11,7 @@
 	"iot_class": "local_polling",
 	"issue_tracker": "https://github.com/nico6770/calaos-ha/issues",
 	"requirements": [
-		"pycalaos==0.0.30"
+		"pycalaos==0.0.29"
 	],
 	"version": "0.3.4"
 }
